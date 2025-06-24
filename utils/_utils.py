@@ -226,3 +226,155 @@ def get_sm_version() -> int:
     if torch.cuda.is_available():
         return torch.cuda.get_device_capability()[0] * 10 + torch.cuda.get_device_capability()[1]
     return 0
+
+import torch
+import time
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+
+@dataclass
+class PerfMetrics:
+    """性能指标收集器"""
+    gpu_util: float = 0.0
+    mem_util: float = 0.0
+    compute_time: float = 0.0
+    transfer_time: float = 0.0
+    prefetch_hits: int = 0
+    total_requests: int = 0
+    
+class PerfMonitor:
+    """性能监控器"""
+    
+    def __init__(self):
+        self.metrics = PerfMetrics()
+        self.start_time = time.time()
+        
+    def update_metrics(self, new_metrics: Dict[str, float]):
+        """更新性能指标"""
+        for k, v in new_metrics.items():
+            if hasattr(self.metrics, k):
+                setattr(self.metrics, k, v)
+                
+    def get_utilization(self) -> Dict[str, float]:
+        """获取资源利用率"""
+        return {
+            'gpu': self.metrics.gpu_util,
+            'memory': self.metrics.mem_util,
+            'prefetch_hit_rate': self.metrics.prefetch_hits / max(1, self.metrics.total_requests)
+        }
+
+class AutoTuner:
+    """自动性能调优器"""
+    
+    def __init__(self, config: Dict[str, any]):
+        self.config = config
+        self.perf_monitor = PerfMonitor()
+        self.tuning_ranges = {
+            'max_gpu_layers': (2, 8),
+            'prefetch_layers': (1, 4),
+            'expert_threshold': (0.05, 0.2),
+            'batch_size': (1, 32)
+        }
+        
+    def optimize(self, target_metric: str = 'gpu') -> Dict[str, any]:
+        """执行自动调优"""
+        best_config = self.config.copy()
+        best_util = 0.0
+        
+        # 网格搜索最优配置
+        for max_layers in range(*self.tuning_ranges['max_gpu_layers']):
+            for prefetch in range(*self.tuning_ranges['prefetch_layers']):
+                for threshold in [0.05, 0.1, 0.15, 0.2]:
+                    for batch_size in [1, 2, 4, 8, 16, 32]:
+                        # 尝试新配置
+                        test_config = {
+                            'max_gpu_layers': max_layers,
+                            'prefetch_layers': prefetch,
+                            'expert_threshold': threshold,
+                            'batch_size': batch_size
+                        }
+                        
+                        # 运行一次推理收集指标
+                        self._run_inference(test_config)
+                        util = self.perf_monitor.get_utilization()[target_metric]
+                        
+                        # 更新最优配置
+                        if util > best_util:
+                            best_util = util
+                            best_config.update(test_config)
+                            
+        return best_config
+    
+    def _run_inference(self, config: Dict[str, any]):
+        """使用给定配置运行推理并收集指标"""
+        # 设置当前配置
+        self.config.update(config)
+        
+        # 运行推理并收集指标
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        
+        start.record()
+        
+        # 收集GPU利用率
+        gpu_util = torch.cuda.utilization()
+        mem_util = torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated()
+        
+        # 更新性能指标
+        self.perf_monitor.update_metrics({
+            'gpu_util': gpu_util,
+            'mem_util': mem_util,
+            'compute_time': end.elapsed_time(start),
+            'total_requests': self.perf_monitor.metrics.total_requests + 1
+        })
+        
+class CudaProfiler:
+    """CUDA性能分析器"""
+    
+    def __init__(self):
+        self.profiler = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA
+            ],
+            schedule=torch.profiler.schedule(
+                wait=1,
+                warmup=1,
+                active=3
+            ),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler('./profile_logs'),
+            record_shapes=True,
+            with_stack=True,
+            profile_memory=True
+        )
+    
+    def __enter__(self):
+        self.profiler.start()
+        return self
+        
+    def __exit__(self, *args):
+        self.profiler.stop()
+        
+    def step(self):
+        """记录一个性能分析步骤"""
+        self.profiler.step()
+        
+def optimize_single_task():
+    """优化单任务性能"""
+    # 创建调优器
+    tuner = AutoTuner({
+        'max_gpu_layers': 4,
+        'prefetch_layers': 2,
+        'expert_threshold': 0.1,
+        'batch_size': 16
+    })
+    
+    # 运行自动调优
+    with CudaProfiler() as profiler:
+        optimal_config = tuner.optimize(target_metric='gpu')
+        profiler.step()
+        
+    # 获取性能指标
+    metrics = tuner.perf_monitor.get_utilization()
+    
+    return optimal_config, metrics

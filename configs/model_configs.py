@@ -33,31 +33,74 @@ class QuantAlgo(StrEnum):
 
 
 class QuantMode(IntFlag):
-    INT4_WEIGHTS = auto()
-    INT8_WEIGHTS = auto()
-    ACTIVATIONS = auto()
-    PER_CHANNEL = auto()
-    PER_TOKEN = auto()
-    PER_GROUP = auto()
-    INT8_KV_CACHE = auto()
-    FP8_KV_CACHE = auto()
-    FP8_QDQ = auto()
-    FP8_ROWWISE = auto()
-    FP8_1x128_128x128 = auto()
-    W4A8_QSERVE = auto()
-    NVFP4 = auto()
-    NVFP4_KV_CACHE = auto()
-    COUNT = auto()
-    WEIGHTS_AND_ACTIVATIONS = INT4_WEIGHTS | INT8_WEIGHTS | ACTIVATIONS
-    VALID_FLAGS = COUNT - 1
+    """
+    Quantization mode flags for different quantization methods and options.
+    不同量化方法和选项的量化模式标志。
+    """
+    INT4_WEIGHTS = auto()      # 4-bit integer weights quantization
+                              # 4位整数权重量化
+    INT8_WEIGHTS = auto()      # 8-bit integer weights quantization
+                              # 8位整数权重量化
+    ACTIVATIONS = auto()       # Activations quantization
+                              # 激活值量化
+    PER_CHANNEL = auto()       # Per-channel quantization
+                              # 按通道量化
+    PER_TOKEN = auto()         # Per-token quantization
+                              # 按token量化
+    PER_GROUP = auto()         # Per-group quantization
+                              # 按组量化
+    INT8_KV_CACHE = auto()     # 8-bit integer KV cache quantization
+                              # 8位整数KV缓存量化
+    FP8_KV_CACHE = auto()      # 8-bit floating point KV cache quantization
+                              # 8位浮点KV缓存量化
+    FP8_QDQ = auto()          # FP8 quantization-dequantization
+                              # FP8量化反量化
+    FP8_ROWWISE = auto()       # Row-wise FP8 quantization
+                              # 按行FP8量化
+    FP8_1x128_128x128 = auto() # FP8 block matrix multiplication
+                               # FP8块矩阵乘法
+    W4A8_QSERVE = auto()       # Weight 4-bit, Activation 8-bit quantization
+                              # 权重4位、激活8位量化
+    NVFP4 = auto()             # NVIDIA FP4 quantization
+                              # NVIDIA FP4量化
+    NVFP4_KV_CACHE = auto()    # NVIDIA FP4 KV cache quantization
+                              # NVIDIA FP4 KV缓存量化
+    COUNT = auto()             # Counter for number of modes
+                              # 模式计数器
+    WEIGHTS_AND_ACTIVATIONS = INT4_WEIGHTS | INT8_WEIGHTS | ACTIVATIONS  # Combined weights and activations quantization
+                                                                        # 组合权重和激活值量化
+    VALID_FLAGS = COUNT - 1    # Mask for valid quantization flags
+                              # 有效量化标志掩码
 
     def __deepcopy__(self, memo):
-        return self
+        """
+        Create a deep copy of the quantization mode.
+        创建量化模式的深拷贝。
+        """
+        return QuantMode(self.value)
 
     def _all(self, bits, mask=VALID_FLAGS):
-        return (self & mask) == bits
+        """
+        Check if all specified bits are set in the mode.
+        检查指定的所有位是否在模式中被设置。
+
+        Args:
+            bits: The bits to check
+                 要检查的位
+            mask: Optional mask to apply
+                 可选的应用掩码
+        """
+        return (self & mask & bits) == bits
 
     def _any(self, bits):
+        """
+        Check if any of the specified bits are set in the mode.
+        检查指定的任何位是否在模式中被设置。
+
+        Args:
+            bits: The bits to check
+                 要检查的位
+        """
         return (self & bits) != 0
 
     def is_int8_weight_only(self):
@@ -417,15 +460,37 @@ TConfig = TypeVar(\"TConfig\", bound=transformers.PretrainedConfig)
 
 @dataclass
 class MoeLoadBalancerConfig:
-    num_slots: Optional[int] = None
-    initial_global_assignments: Optional[Dict[int, List[int]]] = None
-    layer_updates_per_iter: int = 0
+    """
+    Configuration for MoE load balancing.
+    MoE负载均衡的配置类。
+    """
+    num_slots: Optional[int] = None               # Number of total slots for experts
+                                                 # 专家总槽位数
+    initial_global_assignments: Optional[Dict[int, List[int]]] = None  # Initial expert assignments per layer
+                                                                      # 每层的初始专家分配
+    layer_updates_per_iter: int = 0              # Number of layer updates per iteration
+                                                # 每次迭代的层更新数量
 
-    num_experts: Optional[int] = field(default=None, init=False)
-    ep_rank: Optional[int] = field(default=None, init=False)
-    ep_size: Optional[int] = field(default=None, init=False)
+    num_experts: Optional[int] = field(default=None, init=False)  # Total number of experts
+                                                                 # 专家总数
+    ep_rank: Optional[int] = field(default=None, init=False)     # Expert parallel rank
+                                                                 # 专家并行等级
+    ep_size: Optional[int] = field(default=None, init=False)     # Expert parallel size
+                                                                 # 专家并行大小
 
     def setup(self, num_experts: int, ep_rank: int, ep_size: int) -> None:
+        """
+        Setup the load balancer configuration.
+        设置负载均衡器配置。
+
+        Args:
+            num_experts (int): Total number of experts
+                             专家总数
+            ep_rank (int): Expert parallel rank
+                          专家并行等级
+            ep_size (int): Expert parallel size
+                          专家并行大小
+        """
         self.num_experts = num_experts
         self.ep_rank = ep_rank
         self.ep_size = ep_size
@@ -436,89 +501,177 @@ class MoeLoadBalancerConfig:
 
     @property
     def num_local_slots(self) -> int:
+        """
+        Get number of local slots per expert parallel rank.
+        获取每个专家并行等级的本地槽位数。
+        """
         return self.num_slots // self.ep_size
 
     @property
     def slot_start(self) -> int:
+        """
+        Get starting slot index for current expert parallel rank.
+        获取当前专家并行等级的起始槽位索引。
+        """
         return self.ep_rank * self.num_local_slots
 
     @property
     def slot_end(self) -> int:
+        """
+        Get ending slot index for current expert parallel rank.
+        获取当前专家并行等级的结束槽位索引。
+        """
         return self.slot_start + self.num_local_slots
 
     def get_layer_initial_global_assignments(self, layer_idx: int) -> List[int]:
+        """
+        Get initial global expert assignments for a specific layer.
+        获取特定层的初始全局专家分配。
+
+        Args:
+            layer_idx (int): Layer index
+                           层索引
+
+        Returns:
+            List[int]: List of expert assignments
+                      专家分配列表
+        """
         if self.initial_global_assignments is None:
+            # Default round-robin assignment
+            # 默认轮询分配方式
             return [(ep_rank * self.num_experts // self.ep_size + i) %\
                     self.num_experts for ep_rank in range(self.ep_size)\
                     for i in range(self.num_local_slots)]
         else:
             assert layer_idx in self.initial_global_assignments
-            assert len(\
-                self.initial_global_assignments[layer_idx]) == self.num_slots
-            assert set(self.initial_global_assignments[layer_idx]) == set(\
-                range(self.num_experts))
+            assert len(self.initial_global_assignments[layer_idx]) == self.num_slots
+            assert set(self.initial_global_assignments[layer_idx]) == set(range(self.num_experts))
             return self.initial_global_assignments[layer_idx]
 
 @dataclass(kw_only=True)
 class ModelConfig(Generic[TConfig]):
-    pretrained_config: Optional[TConfig] = None
-    mapping: Optional[object] = field(default_factory=lambda: None)
-    quant_config: QuantConfig = field(default_factory=QuantConfig)
-    quant_config_dict: Optional[Dict[str, QuantConfig]] = None
-    skip_create_weights_in_init: bool = False
-    is_generation: bool = True
-    max_num_tokens: int = 8192
-    moe_max_num_tokens: Optional[int] = None
-    moe_load_balancer: Optional[MoeLoadBalancerConfig] = None
+    """
+    Configuration class for model settings.
+    模型设置的配置类。
+    """
+    pretrained_config: Optional[TConfig] = None          # Configuration from pre-trained model
+                                                        # 预训练模型的配置
+    mapping: Optional[object] = field(                   # Object for parallel mapping
+        default_factory=lambda: None)                    # 并行映射对象
+    quant_config: QuantConfig = field(                  # Quantization configuration
+        default_factory=QuantConfig)                     # 量化配置
+    quant_config_dict: Optional[Dict[str, QuantConfig]] = None  # Dictionary of quantization configs per module
+                                                               # 每个模块的量化配置字典
+    skip_create_weights_in_init: bool = False           # Whether to skip weight creation in __init__
+                                                        # 是否在__init__中跳过权重创建
+    is_generation: bool = True                          # Whether model is for generation
+                                                        # 是否是用于生成的模型
+    max_num_tokens: int = 8192                          # Maximum number of tokens
+                                                        # 最大token数量
+    moe_max_num_tokens: Optional[int] = None            # Maximum tokens for MoE
+                                                        # MoE的最大token数量
+    moe_load_balancer: Optional[MoeLoadBalancerConfig] = None  # MoE load balancer config
+                                                               # MoE负载均衡器配置
 
-    attn_backend: str = \'TRTLLM\'
-    moe_backend: str = \'CUTLASS\'
+    attn_backend: str = 'TRTLLM'                        # Attention implementation backend
+                                                        # 注意力实现后端
+    moe_backend: str = 'CUTLASS'                        # MoE implementation backend
+                                                        # MoE实现后端
 
-    extra_attrs: Dict = field(default_factory=dict, repr=False, init=False)
+    extra_attrs: Dict = field(default_factory=dict, repr=False, init=False)  # Extra attributes
+                                                                            # 额外属性
 
-    def __post_init__(self):\
-        if self.pretrained_config and hasattr(self.pretrained_config,\
-                                              \"architectures\"):\
-            self.is_generation = self.is_generation_model(\
+    def __post_init__(self):
+        """
+        Post initialization processing.
+        初始化后处理。
+        """
+        if self.pretrained_config and hasattr(self.pretrained_config, "architectures"):
+            self.is_generation = self.is_generation_model(
                 self.pretrained_config.architectures)
 
     @property
-    def enable_flash_mla(self):\
-        if self.attn_backend == \'TRTLLM\':\
-            if hasattr(self.pretrained_config, \"kv_lora_rank\") and hasattr(\
-                    self.pretrained_config, \"qk_rope_head_dim\"):\
+    def enable_flash_mla(self):
+        """
+        Check if flash multi-head attention is enabled.
+        检查是否启用flash多头注意力。
+
+        Returns:
+            bool: Whether flash MLA is enabled
+                 是否启用flash MLA
+        """
+        if self.attn_backend == 'TRTLLM':
+            if hasattr(self.pretrained_config, "kv_lora_rank") and hasattr(
+                    self.pretrained_config, "qk_rope_head_dim"):
                 head_dim = self.pretrained_config.kv_lora_rank + self.pretrained_config.qk_rope_head_dim
-                if head_dim == 576 and torch.cuda.get_device_capability() == (\
-                        9, 0):\
+                if head_dim == 576 and torch.cuda.get_device_capability() == (9, 0):
                     return True
         return False
 
-    def get_quant_config(self, name: Optional[str] = None) -> QuantConfig:\
-        if name is None or self.quant_config_dict is None:\
+    def get_quant_config(self, name: Optional[str] = None) -> QuantConfig:
+        """
+        Get quantization configuration by name.
+        根据名称获取量化配置。
+
+        Args:
+            name (Optional[str]): Name of the quantization config
+                                量化配置的名称
+
+        Returns:
+            QuantConfig: The quantization configuration
+                        量化配置
+
+        Raises:
+            ValueError: If named config not found
+                       如果未找到指定名称的配置
+        """
+        if name is None or self.quant_config_dict is None:
             return self.quant_config
 
         if name in self.quant_config_dict:
             return self.quant_config_dict[name]
 
-        raise ValueError(f\'quant config of {name} is not found\')
+        raise ValueError(f'quant config of {name} is not found')
 
     @staticmethod
-    def is_generation_model(model_architectures: Optional[List[str]]) -> bool:\
+    def is_generation_model(model_architectures: Optional[List[str]]) -> bool:
+        """
+        Check if model is for text generation.
+        检查模型是否用于文本生成。
+
+        Args:
+            model_architectures: List of model architecture names
+                               模型架构名称列表
+
+        Returns:
+            bool: Whether model is for generation
+                 是否是用于生成的模型
+        """
         if model_architectures is None:
-            # logger.warning( # Removed logger dependency
-            #     \"Model architectures is None, default to is_generation_model=True\"
-            # )\
             return True
-        return model_architectures[0] not in [\
-            \"BertForSequenceClassification\", \"Qwen2ForProcessRewardModel\",\
-            \"Qwen2ForRewardModel\", \"LlamaForTextEmbedding\"\
+        return model_architectures[0] not in [
+            "BertForSequenceClassification", "Qwen2ForProcessRewardModel",
+            "Qwen2ForRewardModel", "LlamaForTextEmbedding"
         ]
 
     @classmethod
-    def from_pretrained(cls,\
-                        checkpoint_dir: str,\
-                        trust_remote_code=False,\
-                        **kwargs):\
+    def from_pretrained(cls, checkpoint_dir: str, trust_remote_code=False, **kwargs):
+        """
+        Create config from pre-trained model checkpoint.
+        从预训练模型检查点创建配置。
+
+        Args:
+            checkpoint_dir (str): Path to checkpoint directory
+                                检查点目录路径
+            trust_remote_code (bool): Whether to trust remote code
+                                    是否信任远程代码
+            **kwargs: Additional arguments
+                     额外参数
+
+        Returns:
+            ModelConfig: Initialized model configuration
+                        初始化的模型配置
+        """
         pretrained_config = transformers.AutoConfig.from_pretrained(\
             checkpoint_dir,\
             trust_remote_code=trust_remote_code,\

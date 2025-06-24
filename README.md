@@ -1,99 +1,144 @@
 # DeepSeek FP4 推理插件
 
-这是一个从 TensorRT-LLM 项目中提取并封装的独立 DeepSeek FP4 推理 PyTorch 插件。它旨在提供 DeepSeek 模型 FP4 量化推理所需的核心功能，包括自定义的 CUDA 内核操作。
+这是一个从 TensorRT-LLM 项目中提取的独立插件，专门用于 DeepSeek 模型的 FP4 量化推理。本插件针对大规模内存受限场景进行了优化。
 
-## 功能
+## 功能特性
 
-- **DeepSeekV3 模型支持**：包含 DeepSeekV3 模型结构及其 FP4 推理相关的修改。
-- **FP4 量化**：支持 FP4 权重的处理和相关的量化实用程序。
-- **CUDA 内核集成**：集成了用于 NVFP4 块尺度交错（block scale interleaving）的 CUDA 内核，以加速推理性能。
+- **高效的内存管理**
+  - 动态层卸载：GPU(16GB) ↔ CPU(96GB) ↔ SSD(400GB)
+  - 异步预取和流水线并行 
+  - 智能专家(MoE)缓存
+  - PCIe 5.0 高带宽利用(14GB/s)
 
-## 安装
+- **FP4 量化支持**
+  - 支持 fp4/fp8 混合精度
+  - 自动量化配置
+  - MoE 动态专家路由
+  
+- **优化算法**
+  - 双缓冲预取机制
+  - 计算与IO重叠
+  - 智能层缓存策略
+  - 动态 Batch 处理
 
-请按照以下步骤安装此插件：
+## 快速开始
 
-1.  **克隆或下载本插件**：
+### 环境要求
 
-    ```bash
-    git clone https://github.com/yourusername/deepseek_fp4_plugin # 请将 'yourusername' 和 'deepseek_fp4_plugin' 替换为您的实际仓库信息
-    cd deepseek_fp4_plugin
-    ```
+- Python 3.8+ 
+- PyTorch 2.0+
+- CUDA 11.8+
+- 16GB+ GPU 内存
+- 96GB+ 系统内存
+- PCIe 5.0 SSD (推荐)
 
-    如果您是从现有项目中提取此目录，请直接导航到 `deepseek_fp4_plugin` 目录。
+### 安装步骤
 
-2.  **创建并激活虚拟环境**（推荐）：
-
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
-    ```
-
-3.  **安装依赖**：
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **构建并安装插件**：
-
-    ```bash
-    python setup.py install
-    # 或者以可编辑模式安装（方便开发）
-    # pip install -e .
-    ```
-
-## 使用示例
-
-一旦插件安装成功，您就可以在您的 PyTorch 项目中导入并使用它：
-
-```python
-import torch
-from deepseek_fp4_plugin.models.deepseek_v3 import DeepseekV3ForCausalLM
-from deepseek_fp4_plugin.quantization.fp4_utils import shuffle_matrix_sf_a
-
-# 示例：加载模型
-# model = DeepseekV3ForCausalLM.from_pretrained("your_model_path")
-
-# 示例：调用 shuffle_matrix_sf_a
-# 假设有一个输入张量 input_tensor 和 epilogue_tile_m
-input_tensor = torch.randn(1, 1024, dtype=torch.float16, device="cuda") # 示例输入
-epilogue_tile_m = 128 # 示例值
-shuffled_output = shuffle_matrix_sf_a(input_tensor, epilogue_tile_m)
-print("Shuffled Output Shape:", shuffled_output.shape)
-
-print("DeepSeek FP4 Plugin 已成功安装和导入！")
-
+1. 创建虚拟环境
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
 ```
 
-## 运行测试
+2. 安装依赖
+```bash 
+pip install -r requirements.txt
+```
 
-您可以通过以下命令运行单元测试和性能测试，以验证插件的功能和性能：
+3. 安装插件
+```bash
+pip install -e .
+```
 
-1.  **运行单元测试**：
+### 基础使用
 
-    ```bash
-    python3 deepseek_fp4_plugin/tests/test_plugin.py
-    ```
+```python
+from deepseek_fp4_plugin import DeepseekInference
 
-    这将执行 `test_plugin.py` 中定义的所有单元测试，确保各个模块的功能正确性。
+# 初始化推理实例
+model = DeepseekInference(
+    model_path="deepseek-r1-fp4",
+    device="cuda",
+    memory_limit=14 # GPU显存限制(GB)
+)
 
-2.  **运行性能测试**：
+# 设置内存配置
+model.set_memory_config(
+    prefetch_layers=2,    # 预取层数
+    max_gpu_layers=4,     # GPU最大层数
+    expert_threshold=0.1  # 专家加载阈值
+)
 
-    ```bash
-    python3 deepseek_fp4_plugin/tests/performance_test.py
-    ```
+# 运行推理
+response = model.generate(
+    "请介绍一下 NVIDIA 公司",
+    max_tokens=1024,
+    temperature=0.7
+)
+print(response)
+```
 
-    这将执行 `performance_test.py` 中定义的性能测试。请注意，性能测试通常需要在支持 CUDA 的 GPU 环境中运行，否则 GPU 相关的测试可能会被跳过。
+### 高级配置
 
-## 注意事项
+```python
+# 自定义内存策略
+model.set_memory_strategy({
+    'gpu_reserved': 2,      # GPU保留内存(GB) 
+    'cpu_cache_size': 32,   # CPU缓存大小(GB)
+    'prefetch_size': 4,     # 预取缓存大小(GB)
+    'min_layers': 1,        # 最小保留层数
+    'max_experts': 32       # 最大激活专家数
+})
 
-- 本插件是一个从 TensorRT-LLM 中提取的独立模块，因此某些依赖于 TensorRT-LLM 内部复杂组件的功能可能无法完全支持。
-- `deepseek_fp4_plugin/quantization/fp4_utils.py` 中的 `pack_int4_weight_col_wise` 函数目前是一个简化实现。要获得完整的 FP4 量化性能，可能需要进一步的 CUDA 内核开发。
+# 设置计算流
+model.set_compute_streams({
+    'prefetch': True,      # 启用预取流
+    'compute': True,       # 启用计算流
+    'transfer': True       # 启用传输流
+})
+```
 
-## 贡献
+## 性能优化指南 
 
-如果您希望贡献或扩展此插件的功能（例如，添加自定义 CUDA 内核以支持 `NotImplementedError` 标记的功能），请参考相关的代码部分。
+1. **显存优化**
+   - 调整 `max_gpu_layers` 平衡吞吐和延迟
+   - 使用 `expert_threshold` 控制专家加载
+   - 启用 `prefetch` 减少等待时间
 
-## 许可证
+2. **吞吐优化** 
+   - 增大 `batch_size` 提高 GPU 利用率
+   - 调整 `prefetch_layers` 平衡内存使用
+   - 开启多流并行计算
 
-此项目在 Apache 2.0 许可下发布。 
+3. **延迟优化**
+   - 减小 `max_gpu_layers` 降低切换开销
+   - 使用 SSD 预取减少 CPU 内存占用
+   - 调整 `expert_threshold` 降低路由开销
+
+## 限制说明
+
+- 需要 PCIe 5.0 SSD 获得最佳性能
+- 建议系统内存≥96GB 以支持大模型
+- 仅支持 NVIDIA GPU (需 Ampere 及以上架构)
+- 目前仅支持 DeepSeek 系列模型
+
+## 常见问题
+
+1. **内存不足:**
+   - 减小 `max_gpu_layers` 和 `prefetch_layers`
+   - 增加 SSD 缓存使用
+   - 降低 batch size
+
+2. **性能问题:**
+   - 检查 PCIe 带宽是否满足要求
+   - 优化预取策略和缓存配置
+   - 调整计算流和内存策略
+
+3. **精度损失:**
+   - 适当增加保留在 GPU 中的层数
+   - 调整专家路由阈值
+   - 使用混合精度训练
+
+## 协议说明
+
+本项目采用 MIT 协议开源。详见 LICENSE 文件。

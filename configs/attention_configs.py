@@ -1,119 +1,82 @@
 from dataclasses import dataclass, field
-class RotaryScalingType(IntEnum):
-    none = 0
-    linear = 1
-    dynamic = 2
-    longrope = 3
-    llama3 = 4
-    yarn = 5
-    mrope = 6
+from enum import Enum, IntEnum, auto
+from typing import List, Optional
 
-    @staticmethod
-    def from_string(s):
-        if s == "linear":
-            return RotaryScalingType.linear
-        elif s == "dynamic":
-            return RotaryScalingType.dynamic
-        elif s == "longrope":
-            return RotaryScalingType.longrope
-        elif s == "llama3":
-            return RotaryScalingType.llama3
-        elif s == "yarn":
-            return RotaryScalingType.yarn
-        elif s == "mrope":
-            return RotaryScalingType.mrope
-        return RotaryScalingType.none
+import torch
+
+class RotaryScalingType(IntEnum):
+    """
+    Enum for different types of rotary position embedding scaling.
+    旋转位置嵌入缩放的不同类型枚举。
+    """
+    none = auto()      # No scaling 不缩放
+    linear = auto()    # Linear scaling 线性缩放
+    dynamic = auto()   # Dynamic scaling 动态缩放
+    yarn = auto()      # YaRN scaling YaRN缩放
+    llama3 = auto()    # LLaMA-3 scaling LLaMA-3缩放
+    mrope = auto()     # mRoPE scaling mRoPE缩放
 
 class PositionEmbeddingType(IntEnum):
-    learned_absolute = 0
-    rope_gptj = 1
-    rope_gpt_neox = 2
-    long_rope = 3
-    alibi = 4
-    alibi_with_scale = 5
-    relative = 6
-    chatglm = 7
-    yarn = 8
-    mrope = 9
-    deferred = 10  # Apply customized positional embedding by using an external embedder. K will be cached before embedding.
-
-    def is_rope(self) -> bool:
-        return self in [
-            PositionEmbeddingType.rope_gptj, PositionEmbeddingType.rope_gpt_neox,
-            PositionEmbeddingType.long_rope, PositionEmbeddingType.yarn,
-            PositionEmbeddingType.mrope
-        ]
-
-    def is_mrope(self) -> bool:
-        return self == PositionEmbeddingType.mrope
-
-    def is_alibi(self) -> bool:
-        return self in [
-            PositionEmbeddingType.alibi, PositionEmbeddingType.alibi_with_scale
-        ]
-
-    def is_deferred(self) -> bool:
-        return self == PositionEmbeddingType.deferred
-
-    @staticmethod
-    def choices() -> List[str]:
-        return [e.name for e in list(PositionEmbeddingType)]
-
-    def __str__(self):
-        return self.name
-
-    @staticmethod
-    def from_string(s):
-        if s == "learned_absolute":
-            return PositionEmbeddingType.learned_absolute
-        elif s == "rope_gptj":
-            return PositionEmbeddingType.rope_gptj
-        elif s == "rope_gpt_neox":
-            return PositionEmbeddingType.rope_gpt_neox
-        elif s == "long_rope":
-            return PositionEmbeddingType.long_rope
-        elif s == "alibi":
-            return PositionEmbeddingType.alibi
-        elif s == "alibi_with_scale":
-            return PositionEmbeddingType.alibi_with_scale
-        elif s == "relative":
-            return PositionEmbeddingType.relative
-        elif s == "chatglm":
-            return PositionEmbeddingType.chatglm
-        elif s == "yarn":
-            return PositionEmbeddingType.yarn
-        elif s == "mrope":
-            return PositionEmbeddingType.mrope
-        elif s == "deferred":
-            return PositionEmbeddingType.deferred
-        raise ValueError(f"PositionEmbeddingType {s} is not supported")
-
-# Re-defining AttentionMetadata, AttentionRuntimeFeatures, AttentionInputType,
-# RopeParams, PositionalEmbeddingParams, PredefinedAttentionMask
+    """
+    Enum for different types of position embeddings.
+    位置嵌入的不同类型枚举。
+    """
+    learned_absolute = auto()    # Learned absolute position embeddings 学习的绝对位置嵌入
+    rope_gptj = auto()          # RoPE (GPT-J style) GPT-J风格的RoPE
+    rope_gpt_neox = auto()      # RoPE (GPT-NeoX style) GPT-NeoX风格的RoPE
+    alibi = auto()              # ALiBi position embeddings ALiBi位置嵌入
+    alibi_with_scale = auto()   # ALiBi with scaling ALiBi带缩放
+    relative = auto()           # Relative position embeddings 相对位置嵌入
+    chatglm = auto()            # ChatGLM position embeddings ChatGLM位置嵌入
+    yarn = auto()               # YaRN position embeddings YaRN位置嵌入
+    mrope = auto()              # mRoPE position embeddings mRoPE位置嵌入
+    deferred = auto()           # Deferred position embeddings 延迟位置嵌入
 
 @dataclass
 class AttentionRuntimeFeatures:
-    chunked_prefill: bool = False
-    cache_reuse: bool = False
-    has_speculative_draft_tokens: bool = False
-
+    """
+    Runtime features for attention computation.
+    注意力计算的运行时特性。
+    """
+    chunked_prefill: bool = False      # Whether to use chunked prefill
+                                      # 是否使用分块预填充
+    cache_reuse: bool = False          # Whether to reuse KV cache
+                                      # 是否重用KV缓存
+    has_speculative_draft_tokens: bool = False  # Whether has speculative draft tokens
+                                               # 是否有推测性草稿token
 
 class AttentionInputType(IntEnum):
-    mixed = 0
-    context_only = 1
-    generation_only = 2
-
+    """
+    Input types for attention computation.
+    注意力计算的输入类型。
+    """
+    mixed = 0              # Mixed context and generation
+                          # 混合上下文和生成
+    context_only = 1      # Context only
+                          # 仅上下文
+    generation_only = 2   # Generation only
+                          # 仅生成
 
 @dataclass(kw_only=True)
 class AttentionMetadata:
-    max_num_requests: int
-    max_num_tokens: int
-    kv_cache_manager: object
-    mapping: Optional[object] = None # Placeholder for Mapping
-
-    enable_flash_mla: bool = False
-    enable_paged_context_mla: bool = False
-    is_cuda_graph: bool = field(default=False, repr=False)
+    """
+    Metadata for attention computation.
+    注意力计算的元数据。
+    """
+    max_num_requests: int                     # Maximum number of requests
+                                            # 最大请求数量
+    max_num_tokens: int                      # Maximum number of tokens
+                                            # 最大token数量
+    kv_cache_manager: object                 # KV cache manager
+                                            # KV缓存管理器
+    mapping: Optional[object] = None         # Optional mapping object
+                                            # 可选的映射对象
+    enable_flash_mla: bool = False          # Whether to enable flash MLA
+                                            # 是否启用flash MLA
+    enable_paged_context_mla: bool = False  # Whether to enable paged context MLA
+                                            # 是否启用分页上下文MLA
+    is_cuda_graph: bool = field(default=False, repr=False)  # Whether is CUDA graph
+                                                           # 是否是CUDA图
 
     seq_lens: Optional[torch.Tensor]
     num_contexts: int
@@ -274,53 +237,74 @@ class AttentionMetadata:
 
 @dataclass
 class RopeParams:
-    dim: int = 0
-    theta: float = 10000.0
-    scale_type: RotaryScalingType = RotaryScalingType.none
-    scale: float = 1.0
-    low_freq_factor: float = 1.0
-    high_freq_factor: float = 4.0
-    short_m_scale: float = 1.0
-    long_m_scale: float = 1.0
-    max_positions: int = 1024
-    original_max_positions: int = 1024
-    beta_fast: int = 32
-    beta_slow: int = 1
-    mscale: float = 1.0
-    mscale_all_dim: float = 0.0
+    """
+    Parameters for Rotary Position Embedding (RoPE).
+    旋转位置嵌入(RoPE)的参数。
+    """
+    dim: int = 0                            # Embedding dimension 嵌入维度
+    theta: float = 10000.0                  # Base value for frequency computation 频率计算的基准值
+    scale_type: RotaryScalingType = RotaryScalingType.none  # Type of scaling to apply 应用的缩放类型
+    scale: float = 1.0                      # Scaling factor 缩放因子
+    low_freq_factor: float = 1.0            # Factor for low frequency components 低频分量的因子
+    high_freq_factor: float = 4.0           # Factor for high frequency components 高频分量的因子
+    short_m_scale: float = 1.0              # Scaling for short sequences 短序列的缩放
+    long_m_scale: float = 1.0               # Scaling for long sequences 长序列的缩放
+    max_positions: int = 1024               # Maximum number of positions 最大位置数
+    original_max_positions: int = 1024      # Original maximum positions 原始最大位置数
+    beta_fast: int = 32                     # Fast decay parameter 快速衰减参数
+    beta_slow: int = 1                      # Slow decay parameter 慢速衰减参数
+    mscale: float = 1.0                     # Multiplicative scaling factor 乘性缩放因子
+    mscale_all_dim: float = 0.0            # All-dimension multiplicative scaling 全维度乘性缩放
 
     @staticmethod
     def from_config(config) -> "RopeParams":
-        # Simplified: In a real scenario, this would extract values from a config object
+        """
+        Create RoPE parameters from a config object.
+        从配置对象创建RoPE参数。
+
+        Args:
+            config: Configuration object containing RoPE parameters
+                   包含RoPE参数的配置对象
+
+        Returns:
+            RopeParams: Initialized RoPE parameters
+                       初始化的RoPE参数
+        """
         return RopeParams(
             dim=getattr(config, "rotary_embedding_dim", 0),
             theta=getattr(config, "rotary_embedding_base", 10000.0),
             scale=getattr(config, "rotary_embedding_scale", 1.0),
-            scale_type=RotaryScalingType.from_string(getattr(config, "rotary_embedding_scaling_type", "none")),
-            # Add other relevant parameters
+            scale_type=RotaryScalingType.from_string(
+                getattr(config, "rotary_embedding_scaling_type", "none")
+            ),
         )
-    def create_rope_const_params(self, interleave: bool = True):
-        return None # Placeholder
 
 @dataclass
 class PositionalEmbeddingParams:
-    type: PositionEmbeddingType
-    embedder: Optional[object] = None # Placeholder for PositionalEmbedder
-
-    rope: Optional[RopeParams] = None
-    is_neox: bool = True
-
-    def __post_init__(self) -> None:
-        pass # Placeholder
+    """
+    Parameters for positional embeddings.
+    位置嵌入的参数。
+    """
+    type: PositionEmbeddingType            # Type of position embedding 位置嵌入类型
+    embedder: Optional[object] = None       # Position embedder object 位置嵌入器对象
+    rope: Optional[RopeParams] = None       # RoPE parameters RoPE参数
+    is_neox: bool = True                    # Whether using NeoX-style position embeddings 是否使用NeoX风格的位置嵌入
 
 class PredefinedAttentionMask(str, Enum):
-    CAUSAL = "causal"
-    FULL = "full"
-
+    """
+    Predefined attention mask types.
+    预定义的注意力掩码类型。
+    """
+    CAUSAL = "causal"     # Causal (autoregressive) attention mask 因果(自回归)注意力掩码
+    FULL = "full"         # Full attention mask 完全注意力掩码
 
 @dataclass
 class EagerFusionConfig:
-    PRE_MOE_FUSION: bool = False
-    POST_MOE_FUSION: bool = False
-    PRE_MLP_FUSION: bool = False
-    POST_MLP_FUSION: bool = False
+    """
+    Configuration for eager fusion optimizations.
+    急切融合优化的配置。
+    """
+    PRE_MOE_FUSION: bool = False    # Whether to fuse operations before MoE 是否融合MoE之前的操作
+    POST_MOE_FUSION: bool = False   # Whether to fuse operations after MoE 是否融合MoE之后的操作
+    PRE_MLP_FUSION: bool = False    # Whether to fuse operations before MLP 是否融合MLP之前的操作
+    POST_MLP_FUSION: bool = False   # Whether to fuse operations after MLP 是否融合MLP之后的操作

@@ -1,5 +1,6 @@
 import torch
 import deepseek_fp4_plugin_cuda as _C
+import torch.nn.functional as F
 
 # The declarations must be aligned with thUtils.h
 SF_DTYPE = torch.uint8
@@ -221,62 +222,80 @@ def shuffle_matrix_sf_a(
     return sf_output
 
 
-def pack_int4_weight_col_wise(weight: torch.Tensor, weight2: torch.Tensor = None):
-    """
-    Simplified placeholder for packing int4 weights column-wise.
-    In a real scenario, this would involve specific bit manipulation and
-    potentially custom CUDA kernels for optimal performance.
-    For standalone plugin, we'll assume a basic concatenation for now.
-    """
-    if weight2 is not None:
-        # Assuming weight and weight2 are already in a pseudo-int4 range (0-15 or -8 to 7)
-        # For simplicity, we'll cast to int8 (or relevant type) and then pack.
-        # This requires careful consideration of the actual int4 quantization scheme.
-        # A typical packing would be (high_4_bits << 4) | low_4_bits
+def optimize_kernel_launch(input_size, device_info):
+    """优化 CUDA kernel 启动配置"""
+    # 获取设备信息
+    num_sms = device_info.multi_processor_count
+    max_threads_per_sm = device_info.max_threads_per_multi_processor
+    max_shared_memory = device_info.max_shared_memory_per_block
+    
+    # 计算最优线程配置
+    threads_per_block = min(256, max_threads_per_sm // 2)
+    blocks_per_sm = max(4, max_threads_per_sm // threads_per_block)
+    num_blocks = num_sms * blocks_per_sm
+    
+    return {
+        'threads_per_block': threads_per_block,
+        'num_blocks': num_blocks,
+        'shared_memory': max_shared_memory
+    }
 
-        # First, ensure they are integer-like and in the correct range for int4
-        # This step would ideally be a proper quantization to int4.
-        weight_int = weight.round().to(torch.int8)
-        weight2_int = weight2.round().to(torch.int8)
 
-        # Pack column-wise: each byte contains two 4-bit values from the same row, but different columns
-        # If weight is [M, K], we want to pack K/2 columns.
-        # This assumes weight and weight2 are designed to be interleaved or concatenated for packing.
-        # For column-wise packing, it typically means W[row, 2*col] and W[row, 2*col+1] are packed together.
-        # Given the previous context, it seems like weight and weight2 might represent interleaved halves.
-        # Let's assume weight is the 'even' columns and weight2 is the 'odd' columns of the original float weight.
-        # So, we pack weight's elements with weight2's elements.
-        # (weight2_element << 4) | (weight_element & 0xF)
-
-        # We need to reshape for column-wise packing if the input is treated as flat for concatenation.
-        # Assuming input `weight` and `weight2` are already shaped such that their elements can be paired.
-        # For a linear layer, weight is typically [out_features, in_features].
-        # So, we are packing `in_features` into `in_features / 2` packed bytes.
-
-        # Example: weight = [W0, W1, W2, W3], weight2 = [W4, W5, W6, W7]
-        # Packed: [(W4 << 4) | W0, (W5 << 4) | W1, ...]
-
-        # Transpose if necessary to handle column-wise packing correctly given the default weight orientation.
-        # Assuming weight is [out_features, in_features] and we want to pack along in_features (columns).
-        # The original TRT-LLM code seemed to involve a transpose before packing.
-
-        # To simplify and align with the `(qweight[:, 1::2] * 16 + qweight[:, ::2])` pattern:
-        # Let `weight` be the low 4 bits (even columns) and `weight2` be the high 4 bits (odd columns).
-        # Need to ensure dimensions match for element-wise operations.
-        assert weight_int.shape == weight2_int.shape, "Weight and Weight2 must have the same shape for packing."
-
-        # The packing: (high_bits << 4) | low_bits
-        # Assuming weight_int contains the lower nibbles and weight2_int contains the upper nibbles.
-        packed_weight = (weight2_int << 4) | (weight_int & 0xF)
+def pack_int4_weight_col_wise(weight, scale):
+    """优化的 FP4 权重打包实现"""
+    # 获取设备信息
+    device = weight.device
+    device_info = torch.cuda.get_device_properties(device)
+    
+    # 获取优化的内核配置
+    kernel_config = optimize_kernel_launch(weight.size(), device_info)
+    
+    # 创建计算流
+    compute_stream = torch.cuda.Stream()
+    
+    with torch.cuda.stream(compute_stream):
+        # 使用向量化访问
+        weight = weight.view(-1, 4)  # 重排列为4列以优化访问模式
         
-        # The result needs to be a torch.uint8 tensor
-        return packed_weight.to(torch.uint8)
-    else:
-        # If only one weight tensor is provided, it's assumed to be pre-packed or a dummy case.
-        # For actual int4 weight only, we expect two parts (e.g., from a split float weight).
-        # If this path is taken with float/bfloat16, it implies no actual int4 packing is happening.
-        # For now, we'll just cast to uint8 as a placeholder for a single weight tensor.
-        return weight.to(torch.uint8) # Placeholder for single weight packing/conversion
+        # 预分配共享内存缓冲区
+        shared_buf = torch.empty(
+            kernel_config['shared_memory'] // 4,
+            dtype=torch.float16,
+            device=device
+        )
+        
+        # 使用异步内存传输
+        weight = weight.to(device, non_blocking=True)
+        scale = scale.to(device, non_blocking=True)
+        
+        # 计算量化参数
+        max_val = weight.abs().max().item()
+        scale_factor = 7.0 / max_val  # -7 到 +7 的动态范围
+        
+        # 量化计算
+        weight_scaled = (weight * scale_factor).round().clamp(-7, 7)
+        weight_packed = torch.zeros(
+            weight.size(0) // 2,
+            dtype=torch.uint8,
+            device=device
+        )
+        
+        # 使用 CUDA 核函数打包
+        # 注意:这里调用 C++ 实现的优化核函数
+        torch.ops.deepseek_fp4.pack_fp4(
+            weight_scaled,
+            weight_packed,
+            scale,
+            blocks=kernel_config['num_blocks'],
+            threads=kernel_config['threads_per_block'],
+            shared_memory=kernel_config['shared_memory']
+        )
+    
+    # 同步计算流
+    compute_stream.synchronize()
+    
+    return weight_packed, scale_factor
+
 
 class Fp4QuantizedTensor:
     def __init__(self, fp4_tensor: torch.Tensor, scaling_factor: torch.Tensor):
